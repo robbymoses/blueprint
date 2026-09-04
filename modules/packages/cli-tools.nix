@@ -2,6 +2,7 @@
 
 let
   stablePackages = with pkgs; [
+    chezmoi
     curl
     git
     neovim
@@ -9,7 +10,8 @@ let
   ];
 
   unstablePackages = with pkgs.unstable; [
-    # Add packages from nixos-unstable here.
+    codex
+    herdr
   ];
 in
 {

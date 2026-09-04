@@ -1,4 +1,4 @@
-{ ... }:
+{ pkgs, ... }:
 
 {
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
@@ -10,6 +10,9 @@
   users.users."robert.moses" = {
     isNormalUser = true;
     description = "Robert Moses";
+    shell = pkgs.zsh;
     extraGroups = [ "wheel" "audio" "video" "networkmanager" ];
   };
+
+  programs.zsh.enable = true;
 }
