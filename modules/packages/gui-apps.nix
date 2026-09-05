@@ -3,6 +3,7 @@
 let
   stablePackages = with pkgs; [
     ghostty
+    vivaldi
   ];
 
   unstablePackages = with pkgs.unstable; [

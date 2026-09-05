@@ -1,0 +1,23 @@
+set -euo pipefail
+
+# Scan the index so a secret is caught even if it is removed from the working
+# tree after being staged.
+gitleaks protect --staged --redact --no-banner
+
+temporaryDirectory="$(mktemp -d)"
+trap 'rm -rf "$temporaryDirectory"' EXIT
+
+while IFS= read -r -d $'\0' file; do
+  stagedFile="$temporaryDirectory/$file"
+  mkdir -p "$(dirname "$stagedFile")"
+  git show ":$file" > "$stagedFile"
+
+  nixfmt --check "$stagedFile"
+  statix check "$stagedFile"
+  deadnix --fail "$stagedFile"
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.nix')
+
+legacyHook="$(git rev-parse --path-format=absolute --git-common-dir)/hooks/pre-commit"
+if [ -x "$legacyHook" ]; then
+  "$legacyHook"
+fi

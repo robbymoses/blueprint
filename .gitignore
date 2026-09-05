@@ -1,0 +1,2 @@
+# Private VPN/container definitions and their credentials must not be committed.
+client-containers/

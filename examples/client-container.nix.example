@@ -1,0 +1,41 @@
+# Place a private copy at ~/client-containers/<private-client-name>.nix, then
+# rebuild with `nixos-rebuild --impure --flake .#asus-duo`. Do not put it in
+# the repo: names and service settings are client metadata.
+{ pkgs, ... }:
+
+{
+  # Twingate writes its enrolled-client state into the persistent container;
+  # no credential needs to be stored in this Nix expression. After rebuilding,
+  # run `sudo nixos-container root-login <container>` and `twingate setup`.
+  blueprint.clientContainers."private-twingate" = {
+    hostAddress = "10.203.0.1";
+    localAddress = "10.203.0.2";
+    packages = with pkgs; [ firefox ];
+    extraConfig = {
+      # Twingate enables systemd-resolved in the container, which cannot use
+      # the host's copied resolv.conf at the same time.
+      networking.useHostResolvConf = false;
+      services.twingate.enable = true;
+    };
+  };
+
+  # Tailscale needs an exit node to route ordinary internet traffic. Keep the
+  # auth key in a root-only file, never in this file or the store. Replace
+  # this host path with /run/secrets/... if you later use a secret manager.
+  blueprint.clientContainers."private-tailscale" = {
+    hostAddress = "10.203.1.1";
+    localAddress = "10.203.1.2";
+    packages = with pkgs; [ firefox ];
+
+    secretMounts."/run/gui-vpn/tailscale-auth-key" =
+      "/home/robert.moses/client-containers/tailscale-auth-key";
+
+    extraConfig.services.tailscale = {
+      enable = true;
+      authKeyFile = "/run/gui-vpn/tailscale-auth-key";
+      # Replace with the intended exit node. This is deliberately kept only
+      # in this private file, not in the tracked flake.
+      extraUpFlags = [ "--exit-node=replace-with-private-exit-node" ];
+    };
+  };
+}
