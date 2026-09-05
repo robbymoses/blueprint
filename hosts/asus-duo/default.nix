@@ -60,6 +60,21 @@ let
       exec zenbook-keyboard-backlight "$level"
     '';
   };
+
+  keyboardBacklightOnSuspend = pkgs.writeShellApplication {
+    name = "keyboard-backlight-on-suspend";
+    runtimeInputs = [ kbLight ];
+    text = ''
+      case "$1" in
+        pre) kb-light off || true ;;
+        post) kb-light high || true ;;
+        *)
+          echo "usage: $0 <pre|post>" >&2
+          exit 2
+          ;;
+      esac
+    '';
+  };
 in
 
 {
@@ -94,6 +109,20 @@ in
       Type = "oneshot";
       ExecStart = "${zenbookKeyboardBacklight}/bin/zenbook-keyboard-backlight ${zenbookKeyboardBacklightLevel}";
     };
+  };
+
+  # Suspend on lid close regardless of whether AC power or external displays
+  # are connected.  The sleep hooks also cover manual suspension; failure to
+  # reach a detached keyboard must never block suspend or resume.
+  services.logind.settings.Login = {
+    HandleLidSwitch = "suspend";
+    HandleLidSwitchExternalPower = "suspend";
+    HandleLidSwitchDocked = "suspend";
+  };
+
+  systemd.services.systemd-suspend.serviceConfig = {
+    ExecStartPre = "${keyboardBacklightOnSuspend}/bin/keyboard-backlight-on-suspend pre";
+    ExecStopPost = "${keyboardBacklightOnSuspend}/bin/keyboard-backlight-on-suspend post";
   };
 
   boot = {
