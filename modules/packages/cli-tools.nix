@@ -5,6 +5,7 @@ let
     chezmoi
     curl
     git
+    lazygit
     helix
     neovim
     pre-commit
