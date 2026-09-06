@@ -1,0 +1,23 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: Scan staged content for secrets
+        entry: gitleaks protect --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+      - id: nixfmt
+        name: Check Nix formatting
+        entry: nixfmt --check
+        language: system
+        types: [nix]
+      - id: statix
+        name: Lint Nix
+        entry: statix check
+        language: system
+        types: [nix]
+      - id: deadnix
+        name: Find dead Nix code
+        entry: deadnix --fail
+        language: system
+        types: [nix]
