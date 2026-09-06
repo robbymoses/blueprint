@@ -83,7 +83,6 @@ in
     ./hardware/cpu.nix
     ./hardware/gpu.nix
     ../../modules/core.nix
-    ../../modules/git-hooks
     ../../modules/containers.nix
     ../../modules/desktop/hyprland.nix
     ../../modules/packages/cli-tools.nix

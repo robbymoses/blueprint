@@ -5,7 +5,9 @@ let
     chezmoi
     curl
     git
+    helix
     neovim
+    pre-commit
     wget
   ];
 

@@ -7,6 +7,11 @@
   ];
   nixpkgs.config.allowUnfree = true;
 
+  environment.variables = {
+    EDITOR = "hx";
+    VISUAL = "hx";
+  };
+
   time.timeZone = "America/Chicago";
   hardware.enableRedistributableFirmware = true;
 
