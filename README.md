@@ -15,6 +15,7 @@ The flake targets NixOS 26.05 and selectively uses packages from
 ├── modules/
 │   ├── core.nix                      # Shared Nix, user, firmware, and locale settings
 │   ├── containers.nix                # Optional isolated GUI VPN containers
+│   ├── desktop/cursors.nix           # Installed cursor themes and selection
 │   ├── desktop/hyprland.nix          # Hyprland, Noctalia, and greeter
 │   └── packages/                     # Stable and unstable package selections
 └── examples/                         # Safe templates for untracked local configuration
@@ -25,7 +26,7 @@ repository, not here.
 
 ## What it configures
 
-- Hyprland with UWSM, Noctalia, and the Noctalia greeter.
+- Hyprland with UWSM, Noctalia, the Noctalia greeter, and Bibata cursors.
 - The `robert.moses` Zsh user, firmware support, and current kernel packages.
 - Ghostty, Vivaldi, Chezmoi, Neovim, Codex, Herdr, and common command-line
   tools. Package lists live in `modules/packages/`.
@@ -82,8 +83,15 @@ microvm <private-client-name> status
 microvm <private-client-name> restart
 ```
 
-`shell` and GUI launches require an active Wayland session. Administrative setup
-inside a container, such as Twingate enrollment, uses normal host sudo:
+`shell` and GUI launches require an active Wayland session. `shell` starts in
+the guest user's normal `/home/robert.moses` home directory and launches its
+configured login shell. This home is inside the guest, not the host home
+directory. The launcher relays the session's Xwayland socket into the container
+without sharing its network namespace, for applications such as DBeaver that
+need X11-backed Java rendering. Containers can use the host Intel GPU's render
+node and VA-API drivers for accelerated rendering and video decoding; they do
+not receive the display-capable DRM device. Administrative setup inside a
+container, such as Twingate enrollment, uses normal host sudo:
 
 ```sh
 sudo nixos-container root-login <private-client-name>

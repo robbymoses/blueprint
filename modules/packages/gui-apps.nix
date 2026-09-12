@@ -4,6 +4,7 @@ let
   stablePackages = with pkgs; [
     ghostty
     vivaldi
+    spotify
   ];
 
   unstablePackages = with pkgs.unstable; [

@@ -23,6 +23,12 @@
     # built against the revisions locked by the upstream Hyprland flake.
     hyprland.url = "github:hyprwm/Hyprland";
 
+    # Build the cursor plugin against the exact Hyprland revision above.
+    hypr-dynamic-cursors = {
+      url = "github:VirtCode/hypr-dynamic-cursors";
+      inputs.hyprland.follows = "hyprland";
+    };
+
     # The cachix branch tracks the newest Noctalia revision already in its cache.
     noctalia.url = "github:noctalia-dev/noctalia/cachix";
 
