@@ -7,7 +7,12 @@
 
 let
   hostUser = "robert.moses";
+  guestHome = "/home/${hostUser}";
   hostUserUid = config.users.users.${hostUser}.uid;
+  hostUserGroup = config.users.users.${hostUser}.group;
+  hostUserGid = config.users.groups.${hostUserGroup}.gid;
+  hostRenderGid = config.users.groups.render.gid;
+  x11ProxyDirectory = "/run/user/${toString hostUserUid}/microvm-x11";
 
   # Each client gets a separate untracked module in ~/client-containers. The
   # directory is read only by an impure evaluation, so none of its metadata is
@@ -35,6 +40,8 @@ let
       pkgs.nixos-container
       pkgs.coreutils
       pkgs.gnugrep
+      pkgs.procps
+      pkgs.socat
       pkgs.systemd
     ];
     text = ''
@@ -52,6 +59,15 @@ let
         exit 1
       fi
 
+      ensureX11ProxyDirectory() {
+        if [ ! -d /run/user/${toString hostUserUid} ]; then
+          echo "microvm: client containers require an active ${hostUser} session" >&2
+          exit 1
+        fi
+
+        install -d -m 0700 -o ${toString hostUserUid} -g ${toString hostUserGid} ${x11ProxyDirectory}
+      }
+
       if [ "$action" != start ] && [ "$action" != stop ] && [ "$action" != restart ] \
         && [ "$action" != reset ] && [ "$action" != status ]; then
         if [ "''${SUDO_USER:-}" != ${lib.escapeShellArg hostUser} ] \
@@ -68,6 +84,7 @@ let
 
       case "$action" in
         start)
+          ensureX11ProxyDirectory
           systemctl --system daemon-reload
           systemctl --system reset-failed "container@$container.service" >/dev/null 2>&1 || true
           exec systemctl --system start "container@$container.service"
@@ -76,6 +93,7 @@ let
           exec systemctl --system stop "container@$container.service"
           ;;
         restart)
+          ensureX11ProxyDirectory
           systemctl --system daemon-reload
           systemctl --system reset-failed "container@$container.service" >/dev/null 2>&1 || true
           exec systemctl --system restart "container@$container.service"
@@ -88,53 +106,132 @@ let
           exec systemctl --system status "container@$container.service" --no-pager
           ;;
         shell)
-          if [ "$#" -ne 3 ]; then
+          if [ "$#" -ne 5 ]; then
             echo "usage: microvm <client> shell" >&2
             exit 64
           fi
           sessionRuntimeDir="$1"
           sessionWaylandDisplay="$2"
           sessionDbusAddress="$3"
+          sessionX11Display="$4"
+          sessionXauthority="$5"
           launchMode="interactive"
-          set -- ${pkgs.bashInteractive}/bin/bash -l
+          # The login-shell wrapper must retain these expansions for execution
+          # inside the container, after setpriv has changed its identity.
+          # shellcheck disable=SC2016
+          set -- ${pkgs.bashInteractive}/bin/bash -c '
+            cd "$HOME"
+            loginShell="$(getent passwd "$(id -u)" | cut -d: -f7)"
+            if [ -z "$loginShell" ] || [ ! -x "$loginShell" ]; then
+              loginShell=${pkgs.bashInteractive}/bin/bash
+            fi
+            exec "$loginShell" -l
+          '
           ;;
         *)
-          if [ "$#" -lt 3 ]; then
+          if [ "$#" -lt 5 ]; then
             echo "usage: microvm <client> <app> [args...]" >&2
             exit 64
           fi
           sessionRuntimeDir="$1"
           sessionWaylandDisplay="$2"
           sessionDbusAddress="$3"
-          shift 3
+          sessionX11Display="$4"
+          sessionXauthority="$5"
+          shift 5
           launchMode="detached"
           set -- "$action" "$@"
           ;;
       esac
 
+      # Hyprland's Xwayland server writes its cookie below the Wayland runtime
+      # directory. It is not always exported as XAUTHORITY by a Wayland-native
+      # terminal, so discover it before entering the container.
+      if [ -z "$sessionXauthority" ]; then
+        for xauthority in "$expectedRuntimeDir"/.Xwaylandauth.*; do
+          if [ -f "$xauthority" ]; then
+            sessionXauthority="$xauthority"
+            break
+          fi
+        done
+      fi
+
       if [ "$sessionRuntimeDir" != "$expectedRuntimeDir" ] \
         || [ "$callerUid" -ne ${toString hostUserUid} ] \
-        || [[ -z "$sessionWaylandDisplay" || "$sessionWaylandDisplay" == */* ]]; then
+        || [[ -z "$sessionWaylandDisplay" || "$sessionWaylandDisplay" == */* ]] \
+        || [[ -n "$sessionX11Display" && ! "$sessionX11Display" =~ ^:[0-9]+(\\.[0-9]+)?$ ]] \
+        || [[ -n "$sessionXauthority" && "$sessionXauthority" != "$expectedRuntimeDir"/* ]]; then
         echo "microvm: GUI launch must come from ${hostUser}'s Wayland session" >&2
         exit 1
+      fi
+
+      # UWSM starts Xwayland with a private /tmp and inherited listening
+      # sockets. Enter its mount namespace for the X11-facing half of the
+      # relay, while exposing a regular socket that can be bind-mounted into
+      # every client container.
+      ensureX11ProxyDirectory
+      if [ -n "$sessionX11Display" ]; then
+        x11DisplayNumber="''${sessionX11Display#:}"
+        x11DisplayNumber="''${x11DisplayNumber%%.*}"
+        x11ProxySocket=${x11ProxyDirectory}/X"$x11DisplayNumber"
+        x11ProxyPidFile="$x11ProxySocket.pid"
+
+        # Replace the pre-namespace relay from the previous configuration.
+        # Future relays are tracked by PID so a stale runtime socket is also
+        # safely recreated after a session restart.
+        if [ -S "$x11ProxySocket" ] && [ ! -r "$x11ProxyPidFile" ]; then
+          for proxyPid in $(pgrep -x socat || true); do
+            if tr '\\0' ' ' < "/proc/$proxyPid/cmdline" | grep -Fq -- "UNIX-LISTEN:$x11ProxySocket"; then
+              kill "$proxyPid"
+              break
+            fi
+          done
+          rm -f "$x11ProxySocket"
+        fi
+
+        if [ -r "$x11ProxyPidFile" ]; then
+          x11ProxyPid=$(cat "$x11ProxyPidFile")
+          if ! [[ "$x11ProxyPid" =~ ^[0-9]+$ ]] || ! kill -0 "$x11ProxyPid" 2>/dev/null; then
+            rm -f "$x11ProxyPidFile" "$x11ProxySocket"
+          fi
+        fi
+
+        if [ ! -S "$x11ProxySocket" ]; then
+          xwaylandPid=$(pgrep -xo Xwayland || true)
+          if ! [[ "$xwaylandPid" =~ ^[0-9]+$ ]]; then
+            echo "microvm: no Xwayland process is available for DISPLAY $sessionX11Display" >&2
+            exit 1
+          fi
+
+          ${pkgs.coreutils}/bin/nohup \
+            nsenter --mount="/proc/$xwaylandPid/ns/mnt" -- \
+              setpriv --reuid="$callerUid" --regid="$callerGid" --clear-groups -- \
+              ${pkgs.socat}/bin/socat \
+                "UNIX-LISTEN:$x11ProxySocket,fork,mode=0600" \
+                "UNIX-CONNECT:/tmp/.X11-unix/X$x11DisplayNumber" \
+            </dev/null >/dev/null 2>&1 &
+          echo "$!" > "$x11ProxyPidFile"
+        fi
       fi
 
       systemctl --system daemon-reload
       systemctl --system reset-failed "container@$container.service" >/dev/null 2>&1 || true
       systemctl --system start "container@$container.service"
 
-      nixos-container run "$container" -- \
-        install -d -m 0700 -o "$callerUid" -g "$callerGid" /var/lib/microvm-home
-
       if [ "$launchMode" = "interactive" ]; then
         exec nixos-container run "$container" -- \
-          setpriv --reuid="$callerUid" --regid="$callerGid" --clear-groups -- \
-          env \
-            HOME=/var/lib/microvm-home \
+          setpriv --reuid="$callerUid" --regid="$callerGid" --init-groups -- \
+          env -i \
+            HOME=${guestHome} \
+            PATH=/run/current-system/sw/bin \
+            TERM=xterm-256color \
+            XDG_CONFIG_DIRS=/etc/xdg \
             XDG_RUNTIME_DIR="$sessionRuntimeDir" \
             WAYLAND_DISPLAY="$sessionWaylandDisplay" \
             XDG_SESSION_TYPE=wayland \
             DBUS_SESSION_BUS_ADDRESS="$sessionDbusAddress" \
+            DISPLAY="$sessionX11Display" \
+            XAUTHORITY="$sessionXauthority" \
             "$@"
       fi
 
@@ -142,13 +239,17 @@ let
       # output in the container instead of holding the host terminal open.
       # shellcheck disable=SC2016
       exec nixos-container run "$container" -- \
-        setpriv --reuid="$callerUid" --regid="$callerGid" --clear-groups -- \
-        env \
-          HOME=/var/lib/microvm-home \
+        setpriv --reuid="$callerUid" --regid="$callerGid" --init-groups -- \
+        env -i \
+          HOME=${guestHome} \
+          PATH=/run/current-system/sw/bin \
+          XDG_CONFIG_DIRS=/etc/xdg \
           XDG_RUNTIME_DIR="$sessionRuntimeDir" \
           WAYLAND_DISPLAY="$sessionWaylandDisplay" \
           XDG_SESSION_TYPE=wayland \
           DBUS_SESSION_BUS_ADDRESS="$sessionDbusAddress" \
+          DISPLAY="$sessionX11Display" \
+          XAUTHORITY="$sessionXauthority" \
           ${pkgs.runtimeShell} -c '
             mkdir -p "$HOME/.local/state"
             nohup "$@" </dev/null >> "$HOME/.local/state/microvm-launcher.log" 2>&1 &
@@ -183,7 +284,7 @@ let
 
       exec /run/wrappers/bin/sudo -- ${containerRunner}/bin/microvm-client-runner \
         "$container" "$action" "$XDG_RUNTIME_DIR" "$WAYLAND_DISPLAY" \
-        "''${DBUS_SESSION_BUS_ADDRESS:-}" "$@"
+        "''${DBUS_SESSION_BUS_ADDRESS:-}" "''${DISPLAY:-}" "''${XAUTHORITY:-}" "$@"
     '';
   };
 
@@ -209,9 +310,20 @@ let
       inherit hostAddress localAddress;
       enableTun = true;
 
-      # Identity mapping retains the host UID needed to access the Wayland
-      # socket, while systemd-nspawn still drops container capabilities.
-      privateUsers = "identity";
+      # Permit render-node access only: this accelerates GUI rendering and
+      # VA-API decoding without exposing a display-capable DRM card node.
+      allowedDevices = [
+        {
+          node = "/dev/dri/renderD128";
+          modifier = "rw";
+        }
+      ];
+
+      # Rootless Podman must create a subordinate user namespace for its
+      # workloads. Keep the nspawn guest's IDs host-visible so newuidmap can
+      # delegate the guest user's configured subordinate-ID range. These
+      # containers isolate client networking, not untrusted workloads.
+      privateUsers = "no";
 
       bindMounts = {
         # Only expose the configured desktop user's runtime directory. It is
@@ -220,6 +332,20 @@ let
         "/run/user/${toString hostUserUid}" = {
           hostPath = "/run/user/${toString hostUserUid}";
           isReadOnly = false;
+        };
+
+        # The launcher relays Xwayland's abstract socket into this regular
+        # socket directory, which remains reachable from private networking.
+        "/tmp/.X11-unix" = {
+          hostPath = x11ProxyDirectory;
+          isReadOnly = false;
+        };
+
+        # NixOS containers use a private /dev, so the permitted render node
+        # must also be mounted into the guest. Keep the display card private.
+        "/dev/dri" = {
+          hostPath = "/dev/dri";
+          isReadOnly = true;
         };
 
       }
@@ -236,9 +362,46 @@ let
             nixpkgs.config.allowUnfree = true;
 
             # GUI processes use setpriv with the invoking user's numeric
-            # identity. Their profile stays in this container's persistent
-            # /var/lib/microvm-home, not in the host home directory.
-            environment.systemPackages = [ pkgs.util-linux ] ++ packages;
+            # identity. Declare that identity in the guest too, so NSS resolves
+            # it instead of showing "I have no name!". Give it a normal guest
+            # home directory; it is distinct from the host user's home.
+            users.users.${hostUser} = {
+              isNormalUser = true;
+              uid = hostUserUid;
+              group = hostUserGroup;
+              home = guestHome;
+              createHome = true;
+              extraGroups = [ "render" ];
+            };
+            users.groups.${hostUserGroup}.gid = hostUserGid;
+            users.groups.render.gid = hostRenderGid;
+
+            # Rootful Docker cannot mount sysfs in a user-namespaced nspawn
+            # guest. Podman runs rootlessly and supplies a compatible `docker`
+            # command without weakening the guest's isolation.
+            virtualisation.podman = {
+              enable = true;
+              dockerCompat = true;
+            };
+
+            # Use the same Intel Mesa and VA-API drivers as the host. The
+            # render node above provides the kernel-side half of acceleration.
+            hardware.graphics = {
+              enable = true;
+              package = config.hardware.graphics.package;
+              package32 = config.hardware.graphics.package32;
+              extraPackages = config.hardware.graphics.extraPackages;
+            };
+            environment.sessionVariables.LIBVA_DRIVER_NAME = "iHD";
+
+            # `docker` invokes Podman's Docker-compatible CLI. Podman delegates
+            # its `compose` subcommand to podman-compose, preserving `docker
+            # compose` workflows in the guest.
+            environment.systemPackages = [
+              pkgs.gh
+              pkgs.podman-compose
+              pkgs.util-linux
+            ] ++ packages;
           }
           extraConfig
         ];
