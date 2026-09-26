@@ -27,6 +27,7 @@
       "audio"
       "video"
       "networkmanager"
+      "docker"
     ];
   };
 

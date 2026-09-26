@@ -91,6 +91,10 @@ in
 
   networking.hostName = "asus-duo";
 
+  # Run the rootful Docker daemon on the host.  The primary user is added to
+  # the `docker` group in modules/core.nix so it can use the daemon directly.
+  virtualisation.docker.enable = true;
+
   # The UX8406MA's detachable keyboard is USB 0b05:1b2c. It has no Aura or
   # kernel LED interface, so set its backlight directly when it is attached.
   environment.systemPackages = [
