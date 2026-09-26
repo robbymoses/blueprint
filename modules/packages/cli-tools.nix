@@ -4,7 +4,9 @@ let
   stablePackages = with pkgs; [
     chezmoi
     curl
+    gnumake
     git
+    gh
     lazygit
     helix
     neovim
