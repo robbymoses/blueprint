@@ -1,10 +1,20 @@
 { pkgs, ... }:
 
 {
-  nix.settings.experimental-features = [
-    "nix-command"
-    "flakes"
-  ];
+  nix = {
+    settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
+
+    # Keep recent generations available for rollback while preventing the
+    # store from growing indefinitely on this workstation.
+    gc = {
+      automatic = true;
+      dates = "weekly";
+      options = "--delete-older-than 30d";
+    };
+  };
   nixpkgs.config.allowUnfree = true;
 
   environment.variables = {

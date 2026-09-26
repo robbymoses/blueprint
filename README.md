@@ -35,6 +35,7 @@ repository, not here.
   its reconnect default is `high`.
 - Optional GUI VPN containers whose networking is isolated from the host.
 - Docker Engine on the host; `robert.moses` can use it without `sudo`.
+- Weekly Nix garbage collection, retaining generations from the last 30 days.
 - System-wide Git pre-commit checks for Nix formatting, lint/dead-code issues,
   and staged secrets.
 
