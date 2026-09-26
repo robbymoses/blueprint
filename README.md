@@ -34,6 +34,7 @@ repository, not here.
   over USB. Use `kb-light <off|l|m|h>` to change it for the current connection;
   its reconnect default is `high`.
 - Optional GUI VPN containers whose networking is isolated from the host.
+- Docker Engine on the host; `robert.moses` can use it without `sudo`.
 - System-wide Git pre-commit checks for Nix formatting, lint/dead-code issues,
   and staged secrets.
 
@@ -97,6 +98,18 @@ container, such as Twingate enrollment, uses normal host sudo:
 sudo nixos-container root-login <private-client-name>
 twingate setup
 ```
+
+Every GUI client container includes rootless Podman for development. A
+Docker-compatible `docker` command is available, without granting the guest
+the mount and network capabilities a rootful Docker daemon would require; its
+private VPN network namespace remains separate from the host. `docker compose`
+uses Podman's Compose compatibility through `podman-compose`.
+
+These guests are isolated client network and development environments, not a
+hostile-code sandbox: their Wayland runtime directory is shared with the host,
+and their user IDs are host-visible so rootless Podman can delegate subordinate
+IDs. In particular, guest root can read any root-only host file mounted into
+that guest.
 
 Keep credentials and client metadata out of Nix expressions and this repository.
 The example shows a root-only, read-only host-file mount for a Tailscale auth key.

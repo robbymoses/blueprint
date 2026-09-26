@@ -6,6 +6,14 @@ container workflow.
 
 ## Change guidelines
 
+- Dotfiles are managed with chezmoi at `/home/robert.moses/.local/share/chezmoi`.
+  Treat it as the source of truth for files deployed under `~/.config`; do not
+  edit deployed targets directly.
+- This repository is for system configuration: hardware, services, packages,
+  and program availability or integration. Keep application configuration and
+  personal preferences in the chezmoi repository.
+- Treat this NixOS configuration and the chezmoi repository as separate
+  repositories. Do not change both unless the task explicitly requires it.
 - Keep host composition in `hosts/asus-duo/default.nix`; put reusable concerns
   in `modules/` and hardware-specific settings under `hosts/asus-duo/hardware/`.
 - Add regular packages to the appropriate file in `modules/packages/`. Use
