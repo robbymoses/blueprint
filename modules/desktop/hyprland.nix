@@ -40,7 +40,6 @@ in
   programs.noctalia = {
     enable = true;
     recommendedServices.enable = true;
-    systemd.enable = true;
   };
 
   # This module configures greetd and AccountsService, then presents the
