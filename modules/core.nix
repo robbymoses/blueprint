@@ -27,8 +27,7 @@
 
   users.users."robert.moses" = {
     isNormalUser = true;
-    # The GUI containers bind only this user's Wayland runtime directory.
-    # Keep this stable so the bind mount is known during Nix evaluation.
+    # Keep this stable across host and guest configurations.
     uid = 1001;
     description = "Robert Moses";
     shell = pkgs.zsh;
@@ -38,6 +37,7 @@
       "video"
       "networkmanager"
       "docker"
+      "libvirtd"
     ];
   };
 

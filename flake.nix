@@ -19,6 +19,9 @@
     # Opt into this per package in modules/packages/{cli-tools,gui-apps}.nix.
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Install selected desktop applications declaratively from Flathub.
+    nix-flatpak.url = "github:gmodena/nix-flatpak/v0.7.0";
+
     # Keep this input's dependency graph independent: its Cachix binaries are
     # built against the revisions locked by the upstream Hyprland flake.
     hyprland.url = "github:hyprwm/Hyprland";

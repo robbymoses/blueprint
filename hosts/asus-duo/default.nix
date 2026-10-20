@@ -83,10 +83,14 @@ in
     ./hardware/cpu.nix
     ./hardware/gpu.nix
     ../../modules/core.nix
+    # This provides only the generic microvm launcher/runtime. Private client
+    # configurations remain separate and are never imported by the host flake.
     ../../modules/containers.nix
     ../../modules/desktop/hyprland.nix
+    ../../modules/flatpak.nix
     ../../modules/packages/cli-tools.nix
     ../../modules/packages/gui-apps.nix
+    ../../modules/virtualization.nix
   ];
 
   networking.hostName = "asus-duo";

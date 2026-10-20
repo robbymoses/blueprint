@@ -11,28 +11,20 @@ let
   hostUserUid = config.users.users.${hostUser}.uid;
   hostUserGroup = config.users.users.${hostUser}.group;
   hostUserGid = config.users.groups.${hostUserGroup}.gid;
-  hostRenderGid = config.users.groups.render.gid;
   x11ProxyDirectory = "/run/user/${toString hostUserUid}/microvm-x11";
 
-  # Each client gets a separate untracked module in ~/client-containers. The
-  # directory is read only by an impure evaluation, so none of its metadata is
-  # added to the flake source or Git history.
-  privateContainersDirectory = "/home/${hostUser}/client-containers";
-  privateContainerFiles =
-    if builtins.pathExists privateContainersDirectory then
-      lib.mapAttrsToList (name: _: "${privateContainersDirectory}/${name}") (
-        lib.filterAttrs (name: type: type == "regular" && lib.hasSuffix ".nix" name) (
-          builtins.readDir privateContainersDirectory
-        )
-      )
-    else
-      [ ];
-  containerNamesFile = pkgs.writeText "microvm-client-names" (
-    lib.concatStringsSep "\n" (lib.attrNames config.blueprint.clientContainers)
-  );
+  # These flags apply to the generic container@.service used by containers
+  # registered with nixos-container. Client names and their NixOS closures are
+  # intentionally not part of the host configuration.
+  genericContainerFlags = lib.concatStringsSep " " [
+    "--bind=/run/user/${toString hostUserUid}:/run/user/${toString hostUserUid}"
+    "--bind=${x11ProxyDirectory}:/tmp/.X11-unix"
+    "--bind-ro=/dev/dri:/dev/dri"
+    "--capability=CAP_NET_ADMIN"
+  ];
 
   # This is the only command granted passwordless sudo. It accepts only
-  # declared client container names. The caller identity comes from sudo's
+  # registered client container names. The caller identity comes from sudo's
   # authenticated environment, never from command-line arguments.
   containerRunner = pkgs.writeShellApplication {
     name = "microvm-client-runner";
@@ -54,8 +46,9 @@ let
       action="$2"
       shift 2
 
-      if ! grep -Fxq -- "$container" ${containerNamesFile}; then
-        echo "microvm: '$container' is not a declared client container" >&2
+      if [[ ! "$container" =~ ^[a-zA-Z0-9_-]+$ ]] \
+        || [ ! -f "/etc/nixos-containers/$container.conf" ]; then
+        echo "microvm: '$container' is not a registered client container" >&2
         exit 1
       fi
 
@@ -288,170 +281,24 @@ let
     '';
   };
 
-  mkGuiVpnContainer =
-    {
-      # Allocate a different pair from 10.203.0.0/16 for each container.
-      # These addresses are only the host-to-container transport; application
-      # traffic is routed through the VPN configured below.
-      hostAddress,
-      localAddress,
-      # Map container paths to root-only host files. This is intended for
-      # authentication material such as a Tailscale auth key; contents are
-      # bind-mounted at runtime and never copied to the Nix store.
-      secretMounts ? { },
-      packages ? [ ],
-      extraConfig ? { },
-    }:
-    {
-      # The host Wayland socket only exists while this user has an active
-      # graphical session, so the launcher starts the container on demand.
-      autoStart = false;
-      privateNetwork = true;
-      inherit hostAddress localAddress;
-      enableTun = true;
-
-      # Permit render-node access only: this accelerates GUI rendering and
-      # VA-API decoding without exposing a display-capable DRM card node.
-      allowedDevices = [
-        {
-          node = "/dev/dri/renderD128";
-          modifier = "rw";
-        }
-      ];
-
-      # Rootless Podman must create a subordinate user namespace for its
-      # workloads. Keep the nspawn guest's IDs host-visible so newuidmap can
-      # delegate the guest user's configured subordinate-ID range. These
-      # containers isolate client networking, not untrusted workloads.
-      privateUsers = "no";
-
-      bindMounts = {
-        # Only expose the configured desktop user's runtime directory. It is
-        # writable because some GUI applications create runtime files there;
-        # the launcher verifies that it is used only by this same user.
-        "/run/user/${toString hostUserUid}" = {
-          hostPath = "/run/user/${toString hostUserUid}";
-          isReadOnly = false;
-        };
-
-        # The launcher relays Xwayland's abstract socket into this regular
-        # socket directory, which remains reachable from private networking.
-        "/tmp/.X11-unix" = {
-          hostPath = x11ProxyDirectory;
-          isReadOnly = false;
-        };
-
-        # NixOS containers use a private /dev, so the permitted render node
-        # must also be mounted into the guest. Keep the display card private.
-        "/dev/dri" = {
-          hostPath = "/dev/dri";
-          isReadOnly = true;
-        };
-
-      }
-      // lib.mapAttrs (_: hostPath: {
-        inherit hostPath;
-        isReadOnly = true;
-      }) secretMounts;
-
-      config =
-        { lib, pkgs, ... }:
-        lib.mkMerge [
-          {
-            system.stateVersion = config.system.stateVersion;
-            nixpkgs.config.allowUnfree = true;
-
-            # GUI processes use setpriv with the invoking user's numeric
-            # identity. Declare that identity in the guest too, so NSS resolves
-            # it instead of showing "I have no name!". Give it a normal guest
-            # home directory; it is distinct from the host user's home.
-            users.users.${hostUser} = {
-              isNormalUser = true;
-              uid = hostUserUid;
-              group = hostUserGroup;
-              home = guestHome;
-              createHome = true;
-              extraGroups = [ "render" ];
-            };
-            users.groups.${hostUserGroup}.gid = hostUserGid;
-            users.groups.render.gid = hostRenderGid;
-
-            # Rootful Docker cannot mount sysfs in a user-namespaced nspawn
-            # guest. Podman runs rootlessly and supplies a compatible `docker`
-            # command without weakening the guest's isolation.
-            virtualisation.podman = {
-              enable = true;
-              dockerCompat = true;
-            };
-
-            # Use the same Intel Mesa and VA-API drivers as the host. The
-            # render node above provides the kernel-side half of acceleration.
-            hardware.graphics = {
-              enable = true;
-              package = config.hardware.graphics.package;
-              package32 = config.hardware.graphics.package32;
-              extraPackages = config.hardware.graphics.extraPackages;
-            };
-            environment.sessionVariables.LIBVA_DRIVER_NAME = "iHD";
-
-            # `docker` invokes Podman's Docker-compatible CLI. Podman delegates
-            # its `compose` subcommand to podman-compose, preserving `docker
-            # compose` workflows in the guest.
-            environment.systemPackages = [
-              pkgs.gh
-              pkgs.podman-compose
-              pkgs.util-linux
-            ] ++ packages;
-          }
-          extraConfig
-        ];
-    };
 in
 {
-  # The private file is optional: a clean checkout remains evaluable and has no
-  # knowledge of client/container names. See examples/client-container.nix.example.
-  imports = privateContainerFiles;
-
-  options.blueprint.clientContainers = lib.mkOption {
-    default = { };
-    description = "Private client applications whose network traffic is isolated in a container.";
-    type = lib.types.attrsOf (
-      lib.types.submodule {
-        options = {
-          hostAddress = lib.mkOption {
-            type = lib.types.str;
-            description = "Host end of this container's private veth pair.";
-          };
-          localAddress = lib.mkOption {
-            type = lib.types.str;
-            description = "Container end of this container's private veth pair.";
-          };
-          secretMounts = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-            description = "Read-only container-path to host-path mounts for runtime secrets.";
-          };
-          packages = lib.mkOption {
-            type = lib.types.listOf lib.types.package;
-            default = [ ];
-            description = "GUI applications installed only in this container.";
-          };
-          extraConfig = lib.mkOption {
-            type = lib.types.attrs;
-            default = { };
-            description = "Additional NixOS configuration for this container.";
-          };
-        };
-      }
-    );
-  };
-
   config = {
-    containers = lib.mapAttrs (_: mkGuiVpnContainer) config.blueprint.clientContainers;
+    # Keep the generic container@.service available without declaring any
+    # client instances in this flake. `nixos-container create` owns the
+    # registrations and per-container profiles under /nix/var/nix/profiles.
+    boot.enableContainers = true;
 
-    # Every GUI VPN container is assigned an address in this otherwise-unused
-    # private range. NAT gives its eth0 enough connectivity to establish the
-    # VPN, while the VPN itself owns the default route for its applications.
+    systemd.services."container@" = {
+      environment.EXTRA_NSPAWN_FLAGS = genericContainerFlags;
+      serviceConfig.DeviceAllow = lib.mkAfter [
+        "/dev/dri/renderD128 rw"
+        "/dev/net/tun rwm"
+      ];
+    };
+
+    # Imperatively registered clients allocate address pairs from this range.
+    # NAT gives eth0 enough connectivity to establish the client's VPN.
     networking.nat = {
       enable = true;
       internalIPs = [ "10.203.0.0/16" ];

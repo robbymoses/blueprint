@@ -1,2 +1,6 @@
 # Private VPN/container definitions and their credentials must not be committed.
 client-containers/
+
+# Local output symlink created by `nix build`.
+/result
+/vm/result

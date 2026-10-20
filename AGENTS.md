@@ -21,7 +21,8 @@ container workflow.
 - Preserve `system.stateVersion` unless performing a deliberate NixOS migration.
 - Keep private container definitions, client names, VPN endpoints, and secrets
   in `/home/robert.moses/client-containers/`, never in the repository or Nix
-  store. Changes to those definitions require `--impure` evaluation.
+  store. The host flake must not import that directory; build and update each
+  registered client through its standalone private flake.
 - Update README.md whenever a user-facing command, repository path, module
   layout, package group, or documented behavior changes. Keep nearby comments
   accurate when changing implementation details.
@@ -35,4 +36,4 @@ the local environment permits it. On `asus-duo`, apply verified changes with:
 sudo nixos-rebuild switch --accept-flake-config --flake .#asus-duo
 ```
 
-Include `--impure` only when private container definitions are involved.
+Validate private client flakes independently from their own directories.
